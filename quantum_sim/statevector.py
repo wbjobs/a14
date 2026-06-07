@@ -24,17 +24,31 @@ class StateVector:
         self._num_qubits = num_qubits
         self._shape = tuple([2] * num_qubits)
         backend = get_backend()
+        xp = backend.xp
+        is_gpu = backend.is_gpu()
 
         if data is None:
-            size = 2**num_qubits
-            self._data = backend.xp.zeros(size, dtype=backend.xp.complex128)
-            self._data[0] = 1.0
-            self._data = self._data.reshape(self._shape)
+            if is_gpu and num_qubits > 20:
+                size = 2**num_qubits
+                data_1d = xp.zeros(size, dtype=xp.complex128)
+                data_1d[0] = 1.0
+                self._data = xp.reshape(data_1d, self._shape, order='F')
+                if hasattr(xp, 'cuda'):
+                    xp.cuda.Stream.null.synchronize()
+            else:
+                self._data = xp.zeros(self._shape, dtype=xp.complex128)
+                self._data[tuple([0] * num_qubits)] = 1.0
         else:
             self._data = backend.to_device(data)
             if self._data.shape != self._shape:
-                self._data = self._data.reshape(self._shape)
-            self._data = self._data.astype(backend.xp.complex128)
+                if self._data.size == 2**num_qubits:
+                    self._data = xp.reshape(self._data, self._shape, order='F')
+                else:
+                    self._data = self._data.reshape(self._shape)
+            self._data = self._data.astype(xp.complex128)
+
+        if is_gpu and num_qubits > 20 and hasattr(xp, 'cuda'):
+            xp.cuda.Stream.null.synchronize()
 
     @property
     def num_qubits(self) -> int:
@@ -49,11 +63,14 @@ class StateVector:
         return self._shape
 
     def to_vector(self) -> Any:
-        return self._data.reshape(-1)
+        backend = get_backend()
+        xp = backend.xp
+        return xp.reshape(self._data, -1, order='F')
 
     def to_numpy(self) -> np.ndarray:
         backend = get_backend()
-        return backend.to_numpy(self._data.reshape(-1))
+        xp = backend.xp
+        return backend.to_numpy(xp.reshape(self._data, -1, order='F'))
 
     def conjugate(self) -> "StateVector":
         result = StateVector(self._num_qubits)
@@ -87,7 +104,7 @@ class StateVector:
         if remaining_axes != desired_order:
             abs_sq = xp.transpose(abs_sq, desired_order)
 
-        return backend.to_numpy(abs_sq.reshape(-1))
+        return backend.to_numpy(xp.reshape(abs_sq, -1, order='F'))
 
     def measure(self, qubits: Union[int, list[int]]) -> tuple[Any, np.ndarray]:
         if isinstance(qubits, int):
@@ -128,9 +145,14 @@ class StateVector:
 
         backend = get_backend()
         xp = backend.xp
+        is_gpu = backend.is_gpu()
 
         gate_matrix = gate.matrix(params)
         n = gate.num_qubits
+
+        if self._num_qubits > 20 and is_gpu:
+            self._apply_gate_large(gate_matrix, qubits, n, xp, backend, is_gpu)
+            return
 
         if n == 1:
             q = qubits[0]
@@ -155,6 +177,57 @@ class StateVector:
                 new_axes[r] = n + i
 
             self._data = xp.transpose(contracted, new_axes)
+
+    def _apply_gate_large(
+        self,
+        gate_matrix: Any,
+        qubits: list[int],
+        n: int,
+        xp: Any,
+        backend: Any,
+        is_gpu: bool,
+    ) -> None:
+        gate_shape = tuple([2] * (2 * n))
+        gate_tensor = gate_matrix.reshape(gate_shape)
+
+        original_shape = self._data.shape
+        qubits_sorted = sorted(qubits)
+        qubits_map = {q: i for i, q in enumerate(qubits)}
+
+        other_qubits = [i for i in range(self._num_qubits) if i not in qubits]
+
+        if n == 1:
+            q = qubits[0]
+            gate_matrix_2d = gate_matrix.reshape(2, 2)
+            new_data = xp.tensordot(gate_matrix_2d, self._data, axes=([1], [q]))
+            if q != 0:
+                new_data = xp.moveaxis(new_data, 0, q)
+            self._data = new_data
+            return
+
+        perm_front = list(qubits) + other_qubits
+        data_permuted = xp.transpose(self._data, perm_front)
+
+        gate_in_axes = list(range(n, 2 * n))
+        contracted = xp.tensordot(gate_tensor, data_permuted, axes=(gate_in_axes, list(range(n))))
+
+        perm_back = [0] * self._num_qubits
+        for i, q in enumerate(qubits):
+            perm_back[q] = i
+        for i, r in enumerate(other_qubits):
+            perm_back[r] = n + i
+
+        inv_perm = [0] * len(perm_back)
+        for i, p in enumerate(perm_back):
+            inv_perm[p] = i
+
+        try:
+            self._data = xp.transpose(contracted, inv_perm)
+        except Exception:
+            self._data = xp.ascontiguousarray(xp.transpose(contracted, inv_perm))
+
+        if is_gpu and hasattr(xp, 'cuda'):
+            xp.cuda.Stream.null.synchronize()
 
     def expectation_value(self, observable: "PauliOp") -> complex:
         backend = get_backend()
@@ -183,8 +256,8 @@ class StateVector:
 
                     temp_state.apply_gate(Z, qubit)
 
-            bra = self._data.conj().reshape(-1)
-            ket = temp_state._data.reshape(-1)
+            bra = xp.reshape(self._data.conj(), -1, order='F')
+            ket = xp.reshape(temp_state._data, -1, order='F')
             result += coeff * xp.sum(bra * ket)
 
         return float(xp.real(result)) if abs(xp.imag(result)) < 1e-10 else complex(result)
@@ -196,12 +269,14 @@ class StateVector:
 
     def __repr__(self) -> str:
         backend = get_backend()
-        vec = backend.to_numpy(self._data.reshape(-1))
+        xp = backend.xp
+        vec = backend.to_numpy(xp.reshape(self._data, -1, order='F'))
         return f"StateVector({self._num_qubits} qubits, {len(vec)} elements)"
 
     def __str__(self) -> str:
         backend = get_backend()
-        vec = backend.to_numpy(self._data.reshape(-1))
+        xp = backend.xp
+        vec = backend.to_numpy(xp.reshape(self._data, -1, order='F'))
         lines = []
         for i, amp in enumerate(vec):
             if abs(amp) > 1e-10:

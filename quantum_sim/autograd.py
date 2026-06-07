@@ -135,6 +135,11 @@ def parameter_shift_gradient(
 ) -> list[float]:
     gradients = []
     backend = get_backend()
+    xp = backend.xp
+
+    denom = 2 * np.sin(shift)
+    if abs(denom) < 1e-10:
+        denom = 1e-10 if denom >= 0 else -1e-10
 
     for i, param in enumerate(params):
         original_value = param._value.copy() if hasattr(param._value, 'copy') else param._value
@@ -147,8 +152,19 @@ def parameter_shift_gradient(
 
         param._value = original_value
 
-        grad = (plus_val - minus_val) / (2 * np.sin(shift))
-        gradients.append(grad)
+        plus_val = xp.asarray(plus_val)
+        minus_val = xp.asarray(minus_val)
+
+        plus_val = xp.where(xp.isnan(plus_val), 0.0, plus_val)
+        minus_val = xp.where(xp.isnan(minus_val), 0.0, minus_val)
+        plus_val = xp.where(xp.isinf(plus_val), 1e30, plus_val)
+        minus_val = xp.where(xp.isinf(minus_val), 1e30, minus_val)
+
+        grad = (plus_val - minus_val) / denom
+        grad = xp.where(xp.isnan(grad), 0.0, grad)
+        grad = xp.where(xp.isinf(grad), 0.0, grad)
+
+        gradients.append(float(grad))
 
     return gradients
 
@@ -181,7 +197,7 @@ def adjoint_differentiation(
             temp_state = state.copy()
             apply_gate_fn(temp_state)
 
-            bra = temp_state.data.conj().reshape(-1)
+            bra = xp.reshape(temp_state.data.conj(), -1, order='F')
 
             obs_state = state.copy()
             for t in observable.terms:
@@ -200,7 +216,7 @@ def adjoint_differentiation(
                         from .gates import Z
                         obs_state.apply_gate(Z, qubit)
 
-                ket = obs_state.data.reshape(-1)
+                ket = xp.reshape(obs_state.data, -1, order='F')
                 grad += coeff * t_coeff * xp.real(xp.sum(bra * ket))
 
         gradients.append(float(grad))
@@ -214,6 +230,13 @@ def numerical_gradient(
     eps: float = 1e-7,
 ) -> list[float]:
     gradients = []
+    backend = get_backend()
+    xp = backend.xp
+
+    denom = 2 * eps
+    if abs(denom) < 1e-15:
+        denom = 1e-15 if denom >= 0 else -1e-15
+
     for i, param in enumerate(params):
         original_value = param._value.copy() if hasattr(param._value, 'copy') else param._value
 
@@ -225,7 +248,18 @@ def numerical_gradient(
 
         param._value = original_value
 
-        grad = (plus_val - minus_val) / (2 * eps)
-        gradients.append(grad)
+        plus_val = xp.asarray(plus_val)
+        minus_val = xp.asarray(minus_val)
+
+        plus_val = xp.where(xp.isnan(plus_val), 0.0, plus_val)
+        minus_val = xp.where(xp.isnan(minus_val), 0.0, minus_val)
+        plus_val = xp.where(xp.isinf(plus_val), 1e30, plus_val)
+        minus_val = xp.where(xp.isinf(minus_val), 1e30, minus_val)
+
+        grad = (plus_val - minus_val) / denom
+        grad = xp.where(xp.isnan(grad), 0.0, grad)
+        grad = xp.where(xp.isinf(grad), 0.0, grad)
+
+        gradients.append(float(grad))
 
     return gradients
