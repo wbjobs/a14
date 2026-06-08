@@ -9,6 +9,7 @@ from .gates import Gate, H, X, Y, Z, I, S, T, RX, RY, RZ, CNOT, CZ, SWAP, TOFFOL
 from .statevector import StateVector
 from .autograd import Parameter, parameter_shift_gradient, numerical_gradient
 from .operators import PauliOp, Hamiltonian
+from .noise import NoiseModel, NoiseChannel
 
 
 class CircuitInstruction:
@@ -164,7 +165,11 @@ class QuantumCircuit:
                 resolved[name] = float(param.value)
         return resolved
 
-    def run(self, param_values: Optional[dict[str, Any]] = None) -> StateVector:
+    def run(
+        self,
+        param_values: Optional[dict[str, Any]] = None,
+        noise_model: Optional[NoiseModel] = None,
+    ) -> StateVector:
         resolved_params = self._resolve_params(param_values)
         state = StateVector(self._num_qubits)
 
@@ -181,14 +186,25 @@ class QuantumCircuit:
 
             state.apply_gate(instr.gate, instr.qubits, gate_params if gate_params else None)
 
+            if noise_model is not None:
+                noise_model.apply_noise_for_gate(state, instr.gate.name, instr.qubits)
+
         return state
 
     def expectation_value(
         self,
         observable: Union[PauliOp, Hamiltonian],
         param_values: Optional[dict[str, Any]] = None,
+        noise_model: Optional[NoiseModel] = None,
+        shots: Optional[int] = None,
     ) -> float:
-        state = self.run(param_values)
+        if shots is not None and shots > 0:
+            total = 0.0
+            for _ in range(shots):
+                state = self.run(param_values, noise_model)
+                total += state.expectation_value(observable)
+            return total / shots
+        state = self.run(param_values, noise_model)
         return state.expectation_value(observable)
 
     def _get_parameters_list(self, parameters: Optional[Union[str, Parameter, list[Union[str, Parameter]]]] = None) -> list[Parameter]:
@@ -223,6 +239,7 @@ class QuantumCircuit:
         parameters: Optional[Union[str, Parameter, list[Union[str, Parameter]]]] = None,
         observable: Optional[Union[PauliOp, Hamiltonian]] = None,
         method: str = "parameter_shift",
+        noise_model: Optional[NoiseModel] = None,
     ) -> Union[float, list[float]]:
         params_list = self._get_parameters_list(parameters)
 
@@ -233,7 +250,7 @@ class QuantumCircuit:
             raise ValueError("Observable is required for gradient computation")
 
         def cost_fn():
-            return self.expectation_value(observable)
+            return self.expectation_value(observable, noise_model=noise_model)
 
         if method == "parameter_shift":
             grads = parameter_shift_gradient(cost_fn, params_list)
@@ -247,15 +264,25 @@ class QuantumCircuit:
         )
         return grads[0] if single_param else grads
 
-    def measure(self, qubits: Union[int, list[int]], param_values: Optional[dict[str, Any]] = None) -> int:
-        state = self.run(param_values)
+    def measure(
+        self,
+        qubits: Union[int, list[int]],
+        param_values: Optional[dict[str, Any]] = None,
+        noise_model: Optional[NoiseModel] = None,
+    ) -> int:
+        state = self.run(param_values, noise_model)
         _, result = state.measure(qubits)
         return result
 
-    def sample(self, shots: int = 1024, param_values: Optional[dict[str, Any]] = None) -> dict[str, int]:
+    def sample(
+        self,
+        shots: int = 1024,
+        param_values: Optional[dict[str, Any]] = None,
+        noise_model: Optional[NoiseModel] = None,
+    ) -> dict[str, int]:
         counts = {}
         for _ in range(shots):
-            state = self.run(param_values)
+            state = self.run(param_values, noise_model)
             all_qubits = list(range(self._num_qubits))
             _, result = state.measure(all_qubits)
             bitstring = format(result, f"0{self._num_qubits}b")

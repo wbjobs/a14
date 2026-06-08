@@ -126,6 +126,23 @@ class Backend:
         mem = psutil.virtual_memory()
         return mem.available, mem.total
 
+    def get_num_gpus(self) -> int:
+        if self.is_gpu():
+            return self._xp.cuda.runtime.getDeviceCount()
+        return 0
+
+    def set_device(self, device_id: int) -> None:
+        if self.is_gpu():
+            num_gpus = self.get_num_gpus()
+            if device_id < 0 or device_id >= num_gpus:
+                raise ValueError(f"Device ID {device_id} out of range (0-{num_gpus-1})")
+            self._xp.cuda.Device(device_id).use()
+
+    def get_device(self) -> int:
+        if self.is_gpu():
+            return self._xp.cuda.runtime.getDevice()
+        return 0
+
     def __repr__(self) -> str:
         return f"Backend(type={self._backend_type.value}, gpu={self.is_gpu()})"
 

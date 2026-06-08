@@ -4,6 +4,41 @@ from .gates import Gate, H, X, Y, Z, I, S, T, RX, RY, RZ, CNOT, CZ, SWAP, TOFFOL
 from .circuit import QuantumCircuit
 from .autograd import Parameter
 from .operators import PauliOp, Hamiltonian
+from .noise import (
+    NoiseChannel,
+    NoiseModel,
+    BitFlip,
+    PhaseFlip,
+    PhaseDamping,
+    Depolarizing,
+    AmplitudeDamping,
+    TwoQubitDepolarizing,
+)
+from .transpiler import (
+    OptimizationPass,
+    Transpiler,
+    SingleQubitFusion,
+    DoubleCXCancel,
+    IIDElimination,
+    CZCancel,
+    SwapCancel,
+    transpile,
+    fuse_single_qubit_gates,
+    cancel_double_cx,
+)
+from .distributed import (
+    DistributedContext,
+    DistributedStateVector,
+    DistributedQuantumCircuit,
+    run_distributed_example,
+)
+from .jit import (
+    JITCompiledCircuit,
+    JITCompiler,
+    JITGradient,
+    jit,
+    run_jit,
+)
 from .vqe import VQE, h2_hamiltonian, h2_uccsd_ansatz, h2_hwe_ansatz
 
 __version__ = "0.1.0"
@@ -31,6 +66,33 @@ __all__ = [
     "Parameter",
     "PauliOp",
     "Hamiltonian",
+    "NoiseChannel",
+    "NoiseModel",
+    "BitFlip",
+    "PhaseFlip",
+    "PhaseDamping",
+    "Depolarizing",
+    "AmplitudeDamping",
+    "TwoQubitDepolarizing",
+    "OptimizationPass",
+    "Transpiler",
+    "SingleQubitFusion",
+    "DoubleCXCancel",
+    "IIDElimination",
+    "CZCancel",
+    "SwapCancel",
+    "transpile",
+    "fuse_single_qubit_gates",
+    "cancel_double_cx",
+    "DistributedContext",
+    "DistributedStateVector",
+    "DistributedQuantumCircuit",
+    "run_distributed_example",
+    "JITCompiledCircuit",
+    "JITCompiler",
+    "JITGradient",
+    "jit",
+    "run_jit",
     "VQE",
     "h2_hamiltonian",
     "h2_uccsd_ansatz",

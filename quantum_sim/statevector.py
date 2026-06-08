@@ -83,7 +83,9 @@ class StateVector:
         if norm > 0:
             self._data /= norm
 
-    def probability(self, qubits: Union[int, list[int]]) -> np.ndarray:
+    def probability(self, qubits: Optional[Union[int, list[int]]] = None) -> np.ndarray:
+        if qubits is None:
+            qubits = list(range(self._num_qubits))
         if isinstance(qubits, int):
             qubits = [qubits]
 
